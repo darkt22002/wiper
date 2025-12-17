@@ -145,6 +145,108 @@ Phase 3: Training-time integration (if warranted)
 
 Progression depends entirely on empirical results.
 
+USAGE / INTEGRATION (CUDA KERNEL + PYTORCH REFERENCE)
+
+Status note:
+This is a Phase-1, correctness-first implementation intended for experimentation and validation. Integration guidance below targets engineers comfortable building custom CUDA extensions and matching semantics against the reference implementation.
+
+Repository layout:
+
+src/wiper_attention_kernel.cu CUDA kernel (Phase-1)
+
+src/wiper_attention_phase1_ref.py PyTorch reference implementation (semantic baseline)
+
+Recommended integration strategy (do this in order)
+
+Treat the Python reference as the source of truth
+Before touching CUDA integration, run and understand the Python reference. Your first goal is not speed. Your first goal is:
+
+same inputs
+
+same outputs (within tolerance)
+
+same masking behavior
+
+same gating / token-retention behavior
+
+Wrap the CUDA kernel as a PyTorch extension
+The cleanest path to plug this into existing frameworks is a small extension module that exposes something like:
+
+wiper_attention_forward(q, k, v, attn_mask=None, params=None) -> out, keep_mask, stats
+
+Keep the interface small and explicit
+Do not integrate into a full transformer stack on day one. Start with one attention layer that:
+
+accepts Q, K, V
+
+applies WIPER gating
+
+returns output + keep-mask (for debugging)
+
+Typical expectations:
+
+q, k, v: float16 or float32, shape [batch, heads, seq_len, head_dim]
+
+attn_mask: optional (causal or padding), broadcastable to attention scores
+
+keep_mask: boolean mask indicating which tokens were retained
+
+Validate numerics before optimizing
+You want three checkpoints:
+
+A) Reference parity (single batch, small shapes)
+
+batch=1, heads=1, seq_len=32, head_dim=64
+
+deterministic seed
+
+compare CUDA output to Python reference output (within tolerance)
+
+B) Mask correctness (padding + causal)
+
+causal masking preserves autoregressive behavior
+
+padding masking does not leak attention to pad tokens
+
+C) Stress shapes (varied but controlled)
+
+seq_len: 32, 64, 128, 256
+
+heads: 1, 8, 16
+
+head_dim: 64, 128
+
+Only after these pass should performance work begin.
+
+Hugging Face Transformers integration (practical path)
+To test WIPER inside an existing model without rewriting the world:
+
+identify the attention module in your target architecture (e.g., LlamaAttention)
+
+add a feature flag (use_wiper)
+
+compute q/k/v normally
+
+call WIPER in place of standard attention
+
+fall back to vanilla attention when disabled
+
+Start inference-only:
+
+fixed prompt
+
+compare logits / outputs
+
+confirm determinism and stability
+
+Validation scripts included
+
+tests/test_consistency.py: reference vs (optional) CUDA parity checks
+
+examples/hf_patch_demo.py: shows how to patch a HF attention module safely
+
+END USAGE / INTEGRATION
+
 Citation
 
 If you reference this work:
